@@ -1,0 +1,793 @@
+---
+title: Le Monde, 1 y. of comments - Ukraine War
+subtitle: As a (partial) proxy to measure people engagement
+author:
+    name: github.com/vionmatthieu/lmd_viz
+    url: https://github.com/vionmatthieu/lmd_viz
+format:
+    html:
+        toc: false
+        toc-location: left
+        theme: spacelab
+        grid:
+            margin-width: 300px
+reference-location: margin
+citation-location: margin
+jupyter:
+  jupytext:
+    formats: 'ipynb,qmd'
+    text_representation:
+      extension: .qmd
+      format_name: quarto
+      format_version: '1.0'
+      jupytext_version: 1.14.6
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+## Inside
+
+As a reader of *Le Monde* ---and the comments section ;) I would regularly encounter familiar subscribers' names. One in particular --more on that later, would *manually* keep track, count & cite "pro-russian" contributors, directly in the comments. That triggered my need to collect and perform some analysis in a bit more data-science oriented fashion.\
+\
+After our initial data collection[^1] we use `Polars` as an alternative to `Pandas` (still used in some parts when we had to code faster) to perform aggregations and `Plotly` to visualize[^2].
+
+[^1]: Custom API, dataset & scope on my other [project](https://github.com/lmd_ukr "go to github "lmd_ukr" api & dataset")
+
+[^2]: This article itself is an html rendering of this [source notebook](https://github.com/lmd_viz "source .ipynb notebook"), via Quarto
+
+The analysis focuses on comments/authors (big numbers, activity over time, cohort analysis...) rather than on articles & titles. To this end, we also lay the foundations to go deeper in the semantic analysis through semantic search via `Sbert` embedding + a `Faiss` index.
+
+```{python}
+import polars as pl
+import pandas as pd
+import numpy as np
+from datetime import datetime, date
+import pickle
+
+import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
+
+from sentence_transformers import SentenceTransformer
+import faiss
+```
+
+Some Polars / Plotly config. to better render our data.
+
+```{python}
+#| code-fold: true
+#| output: false
+# Polars, render text columns nicer when printing / displaying df
+pl.Config.set_fmt_str_lengths(50)
+pl.Config.set_tbl_cols(10)
+pl.Config.set_tbl_width_chars(120)
+pl.Config.set_tbl_rows(10)
+pl.Config.set_tbl_hide_dataframe_shape(True) # prevents systematic display of df/table shape
+
+# change default plotly express theme
+import plotly.io as pio
+
+print(f" reminder plotly quick templates : {pio.templates}")
+template = "simple_white"
+```
+
+## Load data
+
+236k comments with associated articles & titles \| 24th feb 2022 - 24 feb 2023\
+Reminder : conflict starts Febr the 24th 2022, if we exclude the prior Dombass "events".\
+Load our dataset using Polars.
+
+```{python}
+# Read parquet using Polars
+# If interested, I did some speed benchmark in the dataset project (lmd_ukr).
+filepath = "data/lmd_ukraine.parquet"
+coms = pl.read_parquet(filepath)
+```
+
+```{python}
+#| column: page
+#| echo: false
+
+# Can use either print(df) or display(df) or df.head(). In Polars, print displays a nice tabular df.
+# Polars displays column types by default <3
+# print(f"dtypes: {coms.dtypes}"). Not needed unless you're having a lot of cols.
+print(f"shape: {coms.shape}")
+print(coms.head(1))
+```
+
+## Order of magnitude
+
+How many / how big ?\
+People like to know "how many" and for instance, Le Monde regularly get asked how many questions people would send during live sessions etc. We do not have those numbers, but articles / coms counts is still nice to have. Curious if Le Monde has some counters on comments etc. behind the scene. Probably.\
+
+#### Unique articles, comments count, unique authors
+
+Using basic Polars methods, quite similar to Pandas except for the slicing
+
+```{python}
+# number of comments; could also simply use .shape
+count = coms.select([pl.col("comment").count()]).to_series()[0]
+
+# number of unique articles
+nunique_articles = coms.select("article_id").n_unique()
+
+# n unique comments' authors
+nunique_authors = coms.select("author").n_unique()
+
+print(f"Number of comments: {count},\nUnique articles: {nunique_articles},\nUnique authors: {nunique_authors}")
+```
+
+#### Editorial & comment activity, elements of comparison
+
+Our dataset excludes the "Lives" that represent a substancial effort from Le Monde in regards to Ukraine war's coverage. Just by reading Le Monde (or other newspapers) we know that they mobilized a lot of ressources to cover the conflict. Also, regularly lurking into comments section, I know the topic is quite engaging, but now we have the accurate numbers at least.
+
+```{python}
+#| code-fold: true
+# Activity avg posts or comments per day
+days = 365
+total_articles = 2590
+total_comments = 236643
+
+# articles, (excluding lives/blogs posts) per day
+print(f"avg articles per day: {total_articles/days:.2f}")
+
+# comments per day
+print(f"avg comments per day: {total_comments/days:.2f}")
+
+# avg n comments per article
+print(f"avg comments per article: {total_comments/total_articles:.2f}")
+```
+
+To put some perspective on our data, I did a side & quick additional scraping on two topics. Note : Articles count is exhaustive (on selected 1 month period) whereas comments activity was sampled (top 20 articles for each topic) to advance quickly.
+
+-   "Réforme retraites" : very hot topic during with "hottest" month coverage happening in the same time span as the conflict.
+-   "Trump" : an always hot/engaging topic in any media, though a bit out of fashion nowadays.
+
+```{python}
+#| code-fold: true
+# Collected benchmark data
+themes = ["réforme retraites", "Donald trump"]
+n_articles = [
+    374,
+    66,
+]  # obtained on 1 month data (jan/febr 2023, exhaustive/no sampling)
+n_days = 31
+from_sample_avg_comments_per_articles = [
+    124,
+    40,
+]  # obtained from a sample of 20 articles for each theme.
+
+for idx, theme in enumerate(themes):
+    print(f"Theme, {theme}:")
+    print(f" - avg articles per day: {n_articles[idx]/n_days:.2f}")
+    print(
+        f" - avg comments per article: {from_sample_avg_comments_per_articles[idx]:.2f}\n"
+    )
+```
+
+Whereas I selected the "hottest" **month** as a benchmark for *Retraites*, it has are very similar coverage/engagement to Ukraine where numbers are on a **one year** period.\
+*Trump,* subscribers engagement level is more than twice as low.
+
+#### Misc : editorial share (type of articles)
+
+Excluding Lives. Also we will cut off the least represented editorial types (\<= 40 articles) to lighten our pie chart viz.
+
+```{python}
+# our dataset has one row per comments
+# we're interested in share of articles type only
+# "deduplicate", keep only one article (article_id) per row
+article_types = (
+    coms.groupby(by="article_id").first().select(["article_id", "article_type"])
+)
+editorial_share = article_types.groupby(by="article_type").count()
+```
+
+```{python}
+#| echo: false
+#| column: margin
+print(article_types.head(3))
+print(editorial_share.sort("count", descending=True).head(3))
+```
+
+```{python}
+# Filter out least represented categories
+editorial_share = editorial_share.filter(pl.col("count") >= 40) 
+
+labels = editorial_share.to_pandas()["article_type"]
+values = editorial_share.to_pandas()["count"]
+fig = go.Figure(data=[go.Pie(labels=labels, values=values)])
+fig.update_traces(
+    hoverinfo="label+percent+name",
+    textinfo="value",
+    textfont_size=12,
+    hole=0.3,
+    marker=dict(line=dict(color="#000000", width=1)),
+)
+fig.update_layout(
+    title_text="Ukraine coverage (Febr 2022 - Febr 2023), articles types", height=400
+)
+fig.show()
+```
+
+## People engagement over time, subscribers' comment activity as a proxy
+
+General workflow : time series groupby / aggs using Polars, then convert back aggs to Pandas for easier viz with Plotly.\
+Experiment with diverse metrics/timespans to better analyze / render subscribers activity over this first year.\
+**Tl;dr: people activity keeps being high independently to Le Monde publication frequency. Some peaks in frequency would need further investigations (most probably remarkable facts happening)**
+
+Metrics/aggregations/rendering for comments : \> daily count\
+\> week / month avg\
+\> lines vs. hist\
+\> comments per article : daily / weekly\
+\> moving (=rolling) mean on a 30 days period
+
+#### Daily number of comments, weekly/monthly averages
+
+```{python}
+# daily count of comms
+coms_daily_count = coms.groupby("date").count().sort("date", descending=False)
+display(coms_daily_count.head(2))
+
+# average number of comms per week (groupby window, using groupby_dynamic method in Polars)
+weekly_avg = coms_daily_count.groupby_dynamic("date", every="1w").agg(
+    [pl.col("count").mean()]
+)
+display(weekly_avg.head(2))
+
+# average per month
+monthly_avg = coms_daily_count.groupby_dynamic("date", every="1mo").agg(
+    [pl.col("count").mean()]
+)
+display(monthly_avg.head(2))
+```
+
+```{python}
+px.line(
+    weekly_avg.to_pandas(),
+    x="date",
+    y="count",
+    width=600,
+    height=300,
+    template=template,
+)
+```
+
+```{python}
+#| code-fold: true
+px.line(
+    monthly_avg.to_pandas(),
+    x="date",
+    y="count",
+    width=600,
+    height=300,
+    template=template,
+)
+```
+
+```{python}
+px.bar(
+    weekly_avg.to_pandas(),
+    x="date",
+    y="count",
+    width=600,
+    height=300,
+    template=template,
+)
+```
+
+```{python}
+#| code-fold: true
+px.bar(
+    monthly_avg.to_pandas(),
+    x="date",
+    y="count",
+    width=600,
+    height=300,
+    template=template,
+)
+```
+
+#### Lower the impact of publication (articles) frequency : ratio comm / articles, rolling mean
+
+Because number of comments prob. partly tied to how many articles Le Monde published to cover things happening.
+
+```{python}
+# daily ratio comms per article
+
+# 1. group by dates (daily), agg count articles, count comments
+daily_coms_per_articles = (
+    coms.groupby(by="date")
+    .agg(
+        [
+            pl.col("article_id").n_unique().alias("count_articles"),
+            pl.col("comment").count().alias("count_comments"),
+        ]
+    )
+    .sort("date", descending=False)
+)
+display(daily_coms_per_articles.head(2))
+
+# 2. then calculate coms per articles
+daily_coms_per_articles = daily_coms_per_articles.with_columns(
+    (pl.col("count_comments") / pl.col("count_articles")).alias("coms_per_article")
+)
+display(daily_coms_per_articles.head(2))
+```
+
+```{python}
+# weekly ratio coms per article
+
+weekly_coms_per_articles = (
+    coms.sort("date", descending=False)
+    .groupby_dynamic("date", every="1w")
+    .agg(
+        [
+            pl.col("article_id").n_unique().alias("count_articles"),
+            pl.col("comment").count().alias("count_comments"),
+        ]
+    )
+    .sort("date", descending=False)
+)
+display(weekly_coms_per_articles.head(3))
+
+weekly_coms_per_articles = weekly_coms_per_articles.with_columns(
+    (pl.col("count_comments") / pl.col("count_articles")).alias("coms_per_article")
+)
+display(weekly_coms_per_articles.head(3))
+```
+
+```{python}
+# daily coms per article over time
+px.bar(
+    daily_coms_per_articles.to_pandas(),
+    x="date",
+    y="coms_per_article",
+    width=800,
+    height=600,
+    template=template,
+)
+```
+
+```{python}
+# weekly coms per article over time. 
+# TLDR : comments activity keeps being high throughout the "first" year of conflict
+# whatever the articles frequency
+px.bar(
+    weekly_coms_per_articles.to_pandas(),
+    x="date",
+    y="coms_per_article",
+    width=600,
+    height=400,
+    template=template,
+)
+```
+
+```{python}
+# moving (rolling) mean, another way to --kind of, smoothen out coms frequency
+# without the hastle above
+moving_mean = coms_daily_count.with_columns(
+    pl.col("count").rolling_mean(window_size=30).alias("moving_mean")
+)
+moving_mean
+```
+
+```{python}
+px.bar(
+    moving_mean.to_pandas(),
+    x="date",
+    y="moving_mean",
+    width=600,
+    height=400,
+    template=template,
+)
+```
+
+## Who are the most active contributors ? Hardcore posters vs. the silent crowd
+
+**Fun fact** : origin of this notebook is, as a regular comments section reader (and exceptionally author), I would often recognize some contributors' names.\
+One guy, called "goupil_hardi" would regularly act as a "sentinel" and --kind of, debunk & (manually) count then expose the pro-russian individuals/contributions. Made me into deciding scrapping and counting in a more serious fashion =)
+
+Could also do a lot of interesting stuff on trolls detection (if any) but we focused our efforts elsewhere.
+
+#### Top authors ; glad everyone is using a pseudonym o_O
+
+```{python}
+# top commentators
+authors = coms.groupby("author").count().sort("count", descending=True)
+print(authors.head(10))
+```
+
+#### Contribution shape, as expected, hardcore posters vs. the rest
+
+Just different ways to represent how the authors population is distributed
+
+```{python}
+authors.describe()
+```
+
+```{python}
+px.violin(
+    authors.to_pandas(),
+    y="count",
+    box=True,
+    points="all",
+    width=800,
+    height=400,
+    template=template,
+)
+```
+
+```{python}
+# too many 'outliers' to visualize with a std box, cut authors in half.
+# or visualize as 'points' as above
+px.box(authors.to_pandas()[5000:], y="count", width=800, height=400, template=template)
+```
+
+```{python}
+# histogram (filtered)
+px.histogram(
+    authors.filter(pl.col("count") <= 200).to_pandas(),
+    x="count",
+    width=600,
+    height=400,
+    template=template,
+)
+```
+
+### Names that rings a bell
+
+```{python}
+authors.head(10)
+```
+
+```{python}
+# As a comments reader, "goupil hardi" rings a bell
+# he acts kind of like a "troll/fact checker"
+# Second top poster with 2034 comments in 365 days
+# (more than 5 comments a day, on Ukraine only)
+
+coms.select(["author", "date", "comment"]).filter(
+    pl.col("author") == "goupil hardi"
+).sample(10)
+```
+
+```{python}
+# what about Lux, the top poster ? Don't remember about him
+# looks like a strong supporter of Ukraine + wary about "propagandists".
+# Superficial analysis I know. Just curious.
+coms.select(["author", "date", "comment"]).filter(pl.col("author") == "Lux").sample(10)
+```
+
+```{python}
+# Denis Monod-Broca, also a name I remember of.
+# To the very least a strong defender of Russian invasion.
+coms.select(["author", "date", "comment"]).filter(
+    pl.col("author") == "Denis Monod-Broca"
+).sample(10)
+```
+
+Could also do a lot of interesting stuff on trolls (if they exist) but out of this overview scope.
+
+## Engagement through cohort analysis, what's about the retention rate ?
+
+A fancier way to analyze people engagement, over time, on the topic.\
+Would be interesting to perform some benchmark on the retention rate on other topics.
+
+```{python}
+# Steps
+# 1. add/get comment month -> month of the comment for each author
+# 2. add/get cohort month (first month that user posted a comment) 
+# -> first month the authors commented
+# 3. add/get cohort index for each row
+```
+
+```{python}
+# keep relevant columns only
+cohort = coms.clone()
+cohort.head(1)
+```
+
+```{python}
+relevant_columns = ["author", "date", "article_id"]
+cohort = cohort.select(relevant_columns)
+# switch to Pandas for now, more familiar with it
+cohort = cohort.to_pandas()
+cohort.head(3)
+```
+
+```{python}
+# 1. comment month
+# tip : map faster than apply, we can use it cause we're dealin with one col at a time
+cohort["comment_month"] = cohort["date"].map(lambda x: datetime(x.year, x.month, 1))
+display(cohort.head(1))
+# 2. cohort month
+# tip : transform after a groupby,return a df with the same length
+# and here return the min for each entry
+cohort["cohort_month"] = cohort.groupby("author")["comment_month"].transform("min")
+display(cohort.head(3))
+```
+
+```{python}
+# 3. cohort index (for each row, difference in months,
+# between first comment month and cohort month
+def get_date(df, column):
+    year = df[column].dt.year
+    month = df[column].dt.month
+    day = df[column].dt.day
+    return year, month, day
+
+
+comment_year, comment_month, _ = get_date(cohort, "comment_month")
+cohort_year, cohort_month, _ = get_date(cohort, "cohort_month")
+year_diff = comment_year - cohort_year
+month_diff = comment_month - cohort_month
+cohort["cohort_index"] = year_diff * 12 + month_diff + 1
+display(cohort.head(5))
+```
+
+```{python}
+# cohort active users (active authors / retention rate)
+active_authors = (
+    cohort.groupby(["cohort_month", "cohort_index"])["author"]
+    .apply(pd.Series.nunique)
+    .reset_index()
+)
+active_authors = active_authors.pivot_table(
+    index="cohort_month", columns="cohort_index", values="author"
+)
+active_authors
+```
+
+```{python}
+fig = px.imshow(active_authors, text_auto=True, width=800, height=500)
+fig.show()
+```
+
+```{python}
+active_authors_pct = active_authors.copy(deep=True)
+active_authors_pct
+```
+
+```{python}
+# pct active users
+active_authors_pct = active_authors.copy(deep=True)
+for col in active_authors_pct.columns[1:]:
+    active_authors_pct[col] = round(
+        active_authors_pct[col] / active_authors_pct[1] * 100, 2
+    )
+active_authors_pct[1] = 100
+active_authors_pct.head(2)
+```
+
+```{python}
+labels = {"x": "n months", "y": "cohort (by month)", "color": "% author"}
+
+fig = px.imshow(active_authors_pct, text_auto=True, labels=labels)
+fig.update_xaxes(side="top", ticks="outside", tickson="boundaries", ticklen=5)
+fig.update_yaxes(showgrid=False)
+
+fig.update_layout(
+    {
+        "xaxis": {"tickmode": "linear", "showgrid": False},
+        "width": 800,
+        "height": 500,
+        "plot_bgcolor": "rgba(0, 0, 0, 0)",
+        "paper_bgcolor": "rgba(0, 2, 0, 0)",
+    }
+)
+fig.show()
+```
+
+## Comments embedding & fast retrieval using SBERT, Faiss
+
+#### Fasten our models evaluation through prior sampling.
+
+To speed our experiments up, we will work with a sample of comments (around 10% : 236k -\> 20k)\
+FYI,embedding of all comments (all 236k rows), takes approx 10mn on a 1080ti, i7700k, 32gb ram, with models listed below, and even more when using the biggest model `Camembert`.\
+Switched back to Pandas, to faster replicate / adapt resources examples.
+
+```{python}
+# Remember, our dataset was loaded as a Polars dataframe,
+# sample method is very similar in Pandas though.
+coms_sample = coms.sample(seed=42, n=20000, shuffle=True)
+# We're removing articles content and some other cols we won't work with
+keep_cols = [
+    "article_id",
+    "url",
+    "title",
+    "desc",
+    "date",
+    "keywords",
+    "author",
+    "comment",
+]
+coms_sample = coms_sample.select(pl.col(keep_cols))
+print(coms_sample.shape)
+display(coms_sample.head(1))
+```
+
+```{python}
+# Quick cleaning, typically remove comments with 3 emojis only
+# Just filter out small comments
+coms_sample = coms_sample.filter(pl.col("comment").str.n_chars() >= 45)
+print(coms_sample.shape)
+
+# Optional : on later stages as we will perform semantic search on comments
+# let's add a simple, order "id" column to our comments. Not needed eventually.
+comment_ids = list(range(0, coms_sample.shape[0]))
+coms_sample = coms_sample.with_columns(pl.Series(name="comment_id", values=comment_ids))
+display(coms_sample.head(1))
+```
+
+```{python}
+# convert back to Pandas, for "better/faster" flow with embeddings and FAISS
+coms_sample = coms_sample.to_pandas()
+coms_sample.head(1)
+```
+
+#### Semantic search : resources & performance overview of our curated models
+
+-   *Notes and resources I found to be useful*\
+    Model choice, must read : symmetric vs. asymmetric semantic search, language, tuning : [Sbert is all u need](https://medium.com/mlearning-ai/semantic-search-with-s-bert-is-all-you-need-951bc710e160)\
+    Models available and metrics: [Sbert doc](https://www.sbert.net/docs/pretrained_models.html)
+
+-   *Misc*\
+    Models trained for cosine prefer shorter document retrieval, vs. dot product (longer)\
+    Faiss uses **inner product** (=dot product ; += cosine score if vectors are normalized e.g using faiss.normalize_L2 or **L2** to measure distances [(more here)](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances#how-can-i-index-vectors-for-cosine-similarity).\
+    In the first place, we were not sure of our typical use case : short query =\> long comment (asymmetric), or comment =\> similar comment (symmetric).
+
+-   *Candidate models we tested :*
+
+    +---------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | Models                                | Quick notes                                                                                                                                                  |
+    +=======================================+==============================================================================================================================================================+
+    | paraphrase-multilingual-mpnet-base-v2 | multi languages, suitable score : optimized for cosine, max seq len 128                                                                                      |
+    +---------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | distiluse-base-multilingual-cased-v1  | symmetric, multi lang., max seq len 128, optimized for cosine                                                                                                |
+    +---------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | quora-distilbert-multilingual         | multilanguages, short text (questions) closest to our symm use case?\                                                                                        |
+    |                                       | Example [here](https://github.com/UKPLab/sentence-transformers/blob/master/examples/applications/semantic-search/semantic_search_quora_pytorch.py) (pytorch) |
+    +---------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | dangvantuan/sentence-camembert-large  | Bigger model, symmetric ?, french, optimized l2 + tbc others ? Size embed 1024                                                                               |
+    +---------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+    : Curated models
+
+-   *Post run evaluation and remarks :*\
+    `mpnet-base-v2`, `distiluse`, `quora` : fast encoding (20k documents \< 1mn), results quite similar between models, each one finds our test query and pertinent results. A very good baseline.\
+    `mpnet-base-v2`, `distiluse`, `quora` : with a flat inner product faiss index, no difference if we perform vectors normalization or not, maybe because they're optimized for cosine already?\
+    `camembert` is a bigger model (1024 dimension), slower encoding (20k docs = 5mn), nice (better?) results (spoiler alert : it is optimized for French). With a flat IP index, if normalize = False, retrieve similar, *short* documents. If we normalize our embeddings, it retrieves our initial query + *longer*, similar documents.
+
+    #### Convenience functions to repeat our different models runs
+
+```{python}
+""" comments embedding """
+
+def comments_to_list(df, column: str) -> list[str]:
+    """Extract documents from dataframe"""
+    return df[column].values.tolist()
+
+
+def load_model(model_name: str):
+    """Convenience fonction to load SBERT model"""
+    return SentenceTransformer(model_name)
+
+
+def encode_comments(model, comments):
+    """Encode comments using previously loaded model"""
+    return model.encode(comments, show_progress_bar=True)
+
+""" create (a flat) Faiss index """
+
+def create_faiss_index(embeddings, normalize: bool, index_type: str):
+    """
+    Create a flat index in Faiss of index_type "IP" or "L2"
+    Index_types and prior vectors normalization varies
+    according model output optimization and task.
+    """
+    dimension = embeddings.shape[1]
+    embeddings = np.array(embeddings).astype("float32")
+    if normalize:
+        faiss.normalize_L2(embeddings)
+    if index_type == "ip":
+        index = faiss.IndexFlatIP(dimension)
+        index.add(embeddings)
+    else:
+        index = faiss.IndexFlatL2(dimension)
+        index.add(embeddings)
+    return index
+
+
+def save_index(index, filename: str):
+    """Optional, save index to disk"""
+    faiss.write_index(index, f"{filename}.index")
+
+
+def load_index(filename):
+    """Optional, load index from disk"""
+    return faiss.read_index(filename)
+
+""" query index """
+
+def search_index(index, model, query:str, normalize: bool, top_k: int):
+    # encode query
+    vector = model.encode([query])
+    if normalize:
+        faiss.normalize_L2(vector)
+
+    # search with Faiss
+    Distances, Indexes = index.search(vector, top_k)
+    # Distances, Indexes = index.search(np.array(vector).astype("float32"), top_k)
+    return Distances, Indexes
+
+
+def index_to_comments(df, column:str, Indexes):
+    """Convenience function to retrieve top K comments
+    from our original Dataframe
+    """
+    return df.iloc[Indexes[0]][column].tolist()
+```
+
+#### Load model, encode comments
+
+```{python}
+# load comments (a list), pick our candidate model, load it
+comments = comments_to_list(coms_sample, "comment")
+model_name = "paraphrase-multilingual-mpnet-base-v2"
+model = load_model(model_name)
+normalize = False
+```
+
+```{python}
+#| eval: false
+# Encode comments. See notes above for elements of performance / speed
+embeddings = encode_comments(model, comments)
+```
+
+#### Create (or load) our Faiss index, here a flat index
+
+```{python}
+#| eval: false
+# create Faiss Index, here Flat Innner Product 
+# (exhaustive search, "no" optimization)
+index = create_faiss_index(embeddings, normalize, index_type="ip")
+```
+
+```{python}
+#|eval: false
+# optional : save Faiss index to disk
+filename = "mpnet"
+save_index(index, filename)
+```
+
+```{python}
+# Optional, load from disk the previously saved Faiss index
+# so we do not rerun embeddings everytime we're executing the notebook
+filename = "mpnet.index"
+index = load_index(filename)
+```
+
+#### Let's find similar comments
+
+```{python}
+# extract an existing comment (= will be our query) from dataset
+coms_sample["comment"].tolist()[1300]
+```
+
+```{python}
+# encode query, query index
+query = "Quelle arrogance et quel cynisme. Qu'y a t-il de plus terroriste que la Russie d'aujourd'hui?"
+top_k = 8
+Distances, Indexes = search_index(index, model, query, normalize, top_k)
+```
+
+```{python}
+# display top nearest comments
+results = index_to_comments(coms_sample, "comment", Indexes)
+for i, result in enumerate(results):
+    print(f"{i+1}| : {result}")
+```
+
+#### Maybe later just for fun : 0 shot "tone" classification tests using OpenAI API
