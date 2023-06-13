@@ -8,7 +8,21 @@ packages = [{include = "lmd_viz"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
+streamlit = "^1.21.0"
+plotly = "^5.14.1"
+matplotlib = "^3.7.1"
+polars = "^0.17.9"
+pyarrow = "^11.0.0"
+sentence-transformers = "^2.2.2"
+faiss-cpu = "^1.7.4"
+faiss-gpu = "^1.7.2"
+jupytext = "^1.14.6"
+jupyterlab-quarto = "^0.1.45"
 
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
+jupyterlab = "^3.6.3"
 
 [build-system]
 requires = ["poetry-core"]
