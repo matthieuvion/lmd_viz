@@ -11,6 +11,8 @@ format:
         theme: spacelab
         grid:
             margin-width: 300px
+        embed-resources: true
+        code-overflow: wrap
 reference-location: margin
 citation-location: margin
 jupyter:
@@ -37,7 +39,7 @@ After our initial data collection[^1] we use `Polars` as an alternative to `Pand
 
 [^2]: This article itself is an html rendering of this [source notebook](https://github.com/lmd_viz "source .ipynb notebook"), via Quarto
 
-The analysis focuses on comments/authors (big numbers, activity over time, cohort analysis...) rather than on articles & titles. To this end, we also lay the foundations to go deeper in the semantic analysis through semantic search via `Sbert` embedding + a `Faiss` index.
+The analysis focuses on comments/authors (big numbers, activity over time, cohort analysis...) rather than on articles & titles. To this end, we also lay the foundations to go deeper in the semantic analysis through semantic search on comments via `Sbert` embedding + a `Faiss` index.
 
 ```{python}
 import polars as pl
@@ -77,7 +79,9 @@ template = "simple_white"
 
 236k comments with associated articles & titles \| 24th feb 2022 - 24 feb 2023\
 Reminder : conflict starts Febr the 24th 2022, if we exclude the prior Dombass "events".\
-Load our dataset using Polars.
+Load our .parquet dataset[^3] using Polars.
+
+[^3]: Used keywords, [scope](https://github.com/matthieuvion/ukr_lmd) and limitations of our dataset
 
 ```{python}
 # Read parquet using Polars
@@ -99,12 +103,11 @@ print(coms.head(1))
 
 ## Order of magnitude
 
-How many / how big ?\
-People like to know "how many" and for instance, Le Monde regularly get asked how many questions people would send during live sessions etc. We do not have those numbers, but articles / coms counts is still nice to have. Curious if Le Monde has some counters on comments etc. behind the scene. Probably.\
+One always likes to know the "how big". For instance, Le Monde regularly get asked how many questions people would send during live sessions etc. We do not have those numbers, but articles / coms counts are still nice to have. Curious of which metrics (for comments) are available to *Le Monde* behind the scene. Probably a lot.
 
 #### Unique articles, comments count, unique authors
 
-Using basic Polars methods, quite similar to Pandas except for the slicing
+Using basic Polars methods, quite similar to Pandas except for the slicing. Later we will switch back to_pandas() to render with Plotly (also when we will perform comments retrieval).
 
 ```{python}
 # number of comments; could also simply use .shape
@@ -119,9 +122,14 @@ nunique_authors = coms.select("author").n_unique()
 print(f"Number of comments: {count},\nUnique articles: {nunique_articles},\nUnique authors: {nunique_authors}")
 ```
 
+::: {.callout-note appearance="simple"}
+After some googling : *Le Monde* has +-450k online subscribers (+-540k total). The comment section is open to subscribers only.\
+10 500 unique authors means that around **2,3% of the reader base** have engaged in the comment section during the year, on this topic. Not surprising but not bad either, purely by rule of thumb.
+:::
+
 #### Editorial & comment activity, elements of comparison
 
-Our dataset excludes the "Lives" that represent a substancial effort from Le Monde in regards to Ukraine war's coverage. Just by reading Le Monde (or other newspapers) we know that they mobilized a lot of ressources to cover the conflict. Also, regularly lurking into comments section, I know the topic is quite engaging, but now we have the accurate numbers at least.
+editoOur dataset excludes the "Lives" that represent a substancial effort from Le Monde in regards to Ukraine coverage. But just by reading *Le Monde* (or any newspapers really) we know that they have been mobilizing a lot of resources. Also, regularly lurking into comments section, I know the topic is rather engaging. Now we have the accurate numbers, at least.
 
 ```{python}
 #| code-fold: true
@@ -131,18 +139,19 @@ total_articles = 2590
 total_comments = 236643
 
 # articles, (excluding lives/blogs posts) per day
-print(f"avg articles per day: {total_articles/days:.2f}")
+print(f"Theme, Ukraine conflict:")
+print(f" - avg articles per day: {total_articles/days:.2f}")
 
 # comments per day
-print(f"avg comments per day: {total_comments/days:.2f}")
+print(f" - avg comments per day: {total_comments/days:.2f}")
 
 # avg n comments per article
-print(f"avg comments per article: {total_comments/total_articles:.2f}")
+print(f" - avg comments per article: {total_comments/total_articles:.2f}")
 ```
 
-To put some perspective on our data, I did a side & quick additional scraping on two topics. Note : Articles count is exhaustive (on selected 1 month period) whereas comments activity was sampled (top 20 articles for each topic) to advance quickly.
+To put some perspective on our data, I performed a side & quick additional scraping on two additional topics. Articles count is exhaustive (on a given 1 month period) whereas comments activity was sampled from a random selection of articles for each topic to advance quickly.
 
--   "Réforme retraites" : very hot topic during with "hottest" month coverage happening in the same time span as the conflict.
+-   "Réforme retraites" : very hot topic during with "hottest" (demonstrations, strikes) month coverage happening in the same time span as the conflict.
 -   "Trump" : an always hot/engaging topic in any media, though a bit out of fashion nowadays.
 
 ```{python}
@@ -167,17 +176,19 @@ for idx, theme in enumerate(themes):
     )
 ```
 
-Whereas I selected the "hottest" **month** as a benchmark for *Retraites*, it has are very similar coverage/engagement to Ukraine where numbers are on a **one year** period.\
-*Trump,* subscribers engagement level is more than twice as low.
+Ukraine coverage have been a continuous, long term effort, by *Le Monde,* with high interest from the public.\
+Whereas I selected the **most active month** as a benchmark for *Retraites*, it has a very similar coverage/engagement to Ukraine where numbers are on a **one year** period.\
+Re. *Trump,* which is not the least engaging topic, subscribers engagement level is more than twice as low.
 
 #### Misc : editorial share (type of articles)
 
-Excluding Lives. Also we will cut off the least represented editorial types (\<= 40 articles) to lighten our pie chart viz.
+Excluding Lives. Didn't want to focus on editorial coverage, but here the share of articles types.\
+I believe that "factuel" is the AFP news feed, but it needs confirmation.
 
 ```{python}
 # our dataset has one row per comments
-# we're interested in share of articles type only
-# "deduplicate", keep only one article (article_id) per row
+# we're interested in share of article types only
+# Polars groupby + first() to keep article type value, then count()
 article_types = (
     coms.groupby(by="article_id").first().select(["article_id", "article_type"])
 )
@@ -187,12 +198,16 @@ editorial_share = article_types.groupby(by="article_type").count()
 ```{python}
 #| echo: false
 #| column: margin
-print(article_types.head(3))
-print(editorial_share.sort("count", descending=True).head(3))
+
+print(article_types)
+print(editorial_share.sort("count", descending=True))
 ```
 
 ```{python}
-# Filter out least represented categories
+#| label: fig-main
+#| fig-cap: "Ukraine coverage, articles types (total: 2590 articles)"
+
+# Filter out least represented categories to lighten our pie chart viz
 editorial_share = editorial_share.filter(pl.col("count") >= 40) 
 
 labels = editorial_share.to_pandas()["article_type"]
@@ -206,95 +221,98 @@ fig.update_traces(
     marker=dict(line=dict(color="#000000", width=1)),
 )
 fig.update_layout(
-    title_text="Ukraine coverage (Febr 2022 - Febr 2023), articles types", height=400
+    height=400,
+    #width=600
 )
+# title_text="Ukraine coverage (Febr 2022 - Febr 2023), "articles types", 
 fig.show()
 ```
 
 ## People engagement over time, subscribers' comment activity as a proxy
 
-General workflow : time series groupby / aggs using Polars, then convert back aggs to Pandas for easier viz with Plotly.\
-Experiment with diverse metrics/timespans to better analyze / render subscribers activity over this first year.\
-**Tl;dr: people activity keeps being high independently to Le Monde publication frequency. Some peaks in frequency would need further investigations (most probably remarkable facts happening)**
+**TLDR,** people activity keeps being high independently of *Le Monde* articles frequency. Some peaks in activity would need further investigations but prob. tied to the usual remarkable events (offensives, nukes...). Before our analysis I would think that engagement would decrease, even slightly, over time but it seems not.
 
-Metrics/aggregations/rendering for comments : \> daily count\
-\> week / month avg\
-\> lines vs. hist\
-\> comments per article : daily / weekly\
-\> moving (=rolling) mean on a 30 days period
+Code wise, our general workflow revolves around time series groupby / various aggregations using Polars, then convert back to Pandas for a quicker viz via Plotly. We're experimenting with diverse metrics/timespans to better analyze / render subscribers activity over this first year.
 
-#### Daily number of comments, weekly/monthly averages
+Aggregations & viz used below : *coms daily count, week / month avg, lines vs. hist, coms per article : daily / weekly, moving (rolling) mean on a 30 days period.*
+
+#### Daily number of comments, weekly, monthly averages
 
 ```{python}
-# daily count of comms
+# 1. first thing first, number of comms per day
 coms_daily_count = coms.groupby("date").count().sort("date", descending=False)
-display(coms_daily_count.head(2))
 
-# average number of comms per week (groupby window, using groupby_dynamic method in Polars)
+
+# 2. average number of comms per week (groupby window, using groupby_dynamic method in Polars)
 weekly_avg = coms_daily_count.groupby_dynamic("date", every="1w").agg(
     [pl.col("count").mean()]
 )
-display(weekly_avg.head(2))
 
-# average per month
+# 3.same as above but per month
 monthly_avg = coms_daily_count.groupby_dynamic("date", every="1mo").agg(
     [pl.col("count").mean()]
 )
-display(monthly_avg.head(2))
 ```
 
 ```{python}
-px.line(
-    weekly_avg.to_pandas(),
-    x="date",
-    y="count",
-    width=600,
-    height=300,
-    template=template,
-)
+#| echo: false
+#| column: margin
+
+print(weekly_avg.head(3))
+print(monthly_avg.head(3))
 ```
 
 ```{python}
 #| code-fold: true
-px.line(
-    monthly_avg.to_pandas(),
-    x="date",
-    y="count",
-    width=600,
-    height=300,
-    template=template,
-)
-```
+#| column: page
+#| layout-nrow: 1
 
-```{python}
-px.bar(
+fig1 = px.line(
     weekly_avg.to_pandas(),
     x="date",
     y="count",
-    width=600,
+    #width=200,
     height=300,
     template=template,
 )
-```
-
-```{python}
-#| code-fold: true
-px.bar(
+fig2 = px.bar(
+    weekly_avg.to_pandas(),
+    x="date",
+    y="count",
+    #width=200,
+    height=300,
+    template=template,
+)
+fig3 = px.line(
     monthly_avg.to_pandas(),
     x="date",
     y="count",
-    width=600,
+    #width=600,
     height=300,
     template=template,
 )
+fig4 = px.bar(
+    monthly_avg.to_pandas(),
+    x="date",
+    y="count",
+    #width=600,
+    height=300,
+    template=template,
+)
+
+fig1.show()
+fig2.show()
+fig3.show()
+fig4.show()
 ```
 
-#### Lower the impact of publication (articles) frequency : ratio comm / articles, rolling mean
+#### Lower the impact of articles publication freq : ratio comm / articles, rolling mean
 
-Because number of comments prob. partly tied to how many articles Le Monde published to cover things happening.
+When plotting the weekly / monthly avg of comments (above), we clearly distinguish 3 periods of high activity (start of conflict + 2 others), still with a sustained, constant readers involvement.\
+But due to the number of comments prob. being tied to how many articles Le Monde published in the same time, lets visualize comments activity with normalization : coms per articles (removes articles frequency effect) and rolling mean (smoothen things out).
 
 ```{python}
-# daily ratio comms per article
+# daily ratio comms per article. Still using Polars syntax >.<
 
 # 1. group by dates (daily), agg count articles, count comments
 daily_coms_per_articles = (
@@ -307,17 +325,21 @@ daily_coms_per_articles = (
     )
     .sort("date", descending=False)
 )
-display(daily_coms_per_articles.head(2))
 
 # 2. then calculate coms per articles
 daily_coms_per_articles = daily_coms_per_articles.with_columns(
     (pl.col("count_comments") / pl.col("count_articles")).alias("coms_per_article")
 )
-display(daily_coms_per_articles.head(2))
 ```
 
 ```{python}
-# weekly ratio coms per article
+#| echo: false
+#| column: margin
+print(daily_coms_per_articles.head(3))
+```
+
+```{python}
+# weekly ratio coms per article. Polars method is .groupby_dynamic()
 
 weekly_coms_per_articles = (
     coms.sort("date", descending=False)
@@ -330,55 +352,57 @@ weekly_coms_per_articles = (
     )
     .sort("date", descending=False)
 )
-display(weekly_coms_per_articles.head(3))
 
 weekly_coms_per_articles = weekly_coms_per_articles.with_columns(
     (pl.col("count_comments") / pl.col("count_articles")).alias("coms_per_article")
 )
-display(weekly_coms_per_articles.head(3))
 ```
 
 ```{python}
-# daily coms per article over time
-px.bar(
-    daily_coms_per_articles.to_pandas(),
-    x="date",
-    y="coms_per_article",
-    width=800,
-    height=600,
-    template=template,
-)
+#| echo: false
+#| column: margin
+print(weekly_coms_per_articles.head(3))
 ```
 
+Comments activity keeps being high throughout the "first" year of conflict whatever articles frequency :
+
 ```{python}
-# weekly coms per article over time. 
-# TLDR : comments activity keeps being high throughout the "first" year of conflict
-# whatever the articles frequency
+#| code-fold: true
+#| label: fig-main2
+#| fig-cap: "Weekly comments per article"
 px.bar(
     weekly_coms_per_articles.to_pandas(),
     x="date",
     y="coms_per_article",
-    width=600,
+    #width=600,
     height=400,
     template=template,
 )
 ```
 
+Moving (rolling) mean, another way to --kind of, smoothen out articles frequency, without the hassle above.
+
 ```{python}
-# moving (rolling) mean, another way to --kind of, smoothen out coms frequency
-# without the hastle above
 moving_mean = coms_daily_count.with_columns(
     pl.col("count").rolling_mean(window_size=30).alias("moving_mean")
 )
-moving_mean
 ```
 
 ```{python}
+#| echo: false
+#| column: margin
+print(moving_mean.tail(3))
+```
+
+```{python}
+#| code-fold: true
+#| label: fig-main3
+#| fig-cap: "Rolling mean (windows_size=30) of daily count of comments"
 px.bar(
     moving_mean.to_pandas(),
     x="date",
     y="moving_mean",
-    width=600,
+    #width=600,
     height=400,
     template=template,
 )
@@ -386,9 +410,7 @@ px.bar(
 
 ## Who are the most active contributors ? Hardcore posters vs. the silent crowd
 
-**Fun fact** : origin of this notebook is, as a regular comments section reader (and exceptionally author), I would often recognize some contributors' names.\
-One guy, called "goupil_hardi" would regularly act as a "sentinel" and --kind of, debunk & (manually) count then expose the pro-russian individuals/contributions. Made me into deciding scrapping and counting in a more serious fashion =)
-
+**Fun fact** : the guy "goupil_hardi" would regularly act as a "sentinel" and --kind of, debunk & (manually) count then expose the pro-russian individuals/contributions. He is the one that made me decide to scrap and count in a more serious fashion.\
 Could also do a lot of interesting stuff on trolls detection (if any) but we focused our efforts elsewhere.
 
 #### Top authors ; glad everyone is using a pseudonym o_O
