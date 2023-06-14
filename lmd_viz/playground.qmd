@@ -4,13 +4,15 @@ subtitle: As a (partial) proxy to measure people engagement
 author:
     name: github.com/vionmatthieu/lmd_viz
     url: https://github.com/vionmatthieu/lmd_viz
+execute:
+    freeze: auto
 format:
     html:
         toc: false
         toc-location: left
         theme: spacelab
         grid:
-            margin-width: 300px
+            margin-width: 320px
         embed-resources: true
         code-overflow: wrap
 reference-location: margin
@@ -84,7 +86,7 @@ Load our .parquet dataset[^3] using Polars.
 [^3]: Used keywords, [scope](https://github.com/matthieuvion/ukr_lmd) and limitations of our dataset
 
 ```{python}
-# Read parquet using Polars
+# Read parquet using Polars. Could also use scan + collect syntax for lazy execution
 # If interested, I did some speed benchmark in the dataset project (lmd_ukr).
 filepath = "data/lmd_ukraine.parquet"
 coms = pl.read_parquet(filepath)
@@ -107,9 +109,11 @@ One always likes to know the "how big". For instance, Le Monde regularly get ask
 
 #### Unique articles, comments count, unique authors
 
-Using basic Polars methods, quite similar to Pandas except for the slicing. Later we will switch back to_pandas() to render with Plotly (also when we will perform comments retrieval).
+236k comments from 10 500 unique subscribers, under 2600 articles.
 
 ```{python}
+# Polars methods are quite similar to Pandas except for the slicing.
+
 # number of comments; could also simply use .shape
 count = coms.select([pl.col("comment").count()]).to_series()[0]
 
@@ -129,7 +133,7 @@ After some googling : *Le Monde* has +-450k online subscribers (+-540k total). T
 
 #### Editorial & comment activity, elements of comparison
 
-editoOur dataset excludes the "Lives" that represent a substancial effort from Le Monde in regards to Ukraine coverage. But just by reading *Le Monde* (or any newspapers really) we know that they have been mobilizing a lot of resources. Also, regularly lurking into comments section, I know the topic is rather engaging. Now we have the accurate numbers, at least.
+Our dataset excludes the "Lives" that represent a substancial coverage effort from *Le Monde*. But just by reading the newspaper (or any, really) we know that they have been mobilizing a lot of resources. Also, regularly lurking into comments section, I know the topic is rather engaging. Now we have the accurate numbers, at least.
 
 ```{python}
 #| code-fold: true
@@ -149,7 +153,7 @@ print(f" - avg comments per day: {total_comments/days:.2f}")
 print(f" - avg comments per article: {total_comments/total_articles:.2f}")
 ```
 
-To put some perspective on our data, I performed a side & quick additional scraping on two additional topics. Articles count is exhaustive (on a given 1 month period) whereas comments activity was sampled from a random selection of articles for each topic to advance quickly.
+Imagine publishing 7 articles a day on a topic, *for one year*. To put some perspective on our data, I performed a side & quick additional scraping on two additional topics. Articles count is exhaustive (on a given 1 month period) whereas comments activity was sampled from a random selection of articles for each topic to advance quickly.
 
 -   "Réforme retraites" : very hot topic during with "hottest" (demonstrations, strikes) month coverage happening in the same time span as the conflict.
 -   "Trump" : an always hot/engaging topic in any media, though a bit out of fashion nowadays.
@@ -176,9 +180,7 @@ for idx, theme in enumerate(themes):
     )
 ```
 
-Ukraine coverage have been a continuous, long term effort, by *Le Monde,* with high interest from the public.\
-Whereas I selected the **most active month** as a benchmark for *Retraites*, it has a very similar coverage/engagement to Ukraine where numbers are on a **one year** period.\
-Re. *Trump,* which is not the least engaging topic, subscribers engagement level is more than twice as low.
+Ukraine coverage have been a continuous, long term effort, by *Le Monde,* with high interest from the public. Whereas I selected the **most active month** as a benchmark for *Retraites*, it has a very similar coverage/engagement to Ukraine where numbers are on a **one year** period. Re. *Trump,* which is not the least engaging topic, subscribers engagement level is more than twice as low than Ukraine.
 
 #### Misc : editorial share (type of articles)
 
@@ -228,13 +230,13 @@ fig.update_layout(
 fig.show()
 ```
 
-## People engagement over time, subscribers' comment activity as a proxy
+## People engagement on war over time, subscribers' comment activity as a proxy
 
-**TLDR,** people activity keeps being high independently of *Le Monde* articles frequency. Some peaks in activity would need further investigations but prob. tied to the usual remarkable events (offensives, nukes...). Before our analysis I would think that engagement would decrease, even slightly, over time but it seems not.
+**TLDR,** people activity keeps being high independently of *Le Monde* articles frequency. Some peaks in activity would need further investigations but prob. tied to the usual remarkable events (offensives, nukes...). Before our analysis I would think that engagement would decrease, even slightly, over time but it seems not. Also, we're aware that comments as a proxy has biases[^4].
 
-Code wise, our general workflow revolves around time series groupby / various aggregations using Polars, then convert back to Pandas for a quicker viz via Plotly. We're experimenting with diverse metrics/timespans to better analyze / render subscribers activity over this first year.
+[^4]: Le Monde 500k subscribers is a particular demographic, and only a handful of them are active authors.
 
-Aggregations & viz used below : *coms daily count, week / month avg, lines vs. hist, coms per article : daily / weekly, moving (rolling) mean on a 30 days period.*
+Code wise, our general workflow revolves around time series groupby / various aggregations using Polars, then convert back the results to Pandas for a quicker viz via Plotly. We will experiment with diverse metrics/windows to better render subscribers activity over this first year : *coms daily count, week / month avg, lines vs. hist, coms per article : daily / weekly, moving (rolling) mean on a 30 days period.*
 
 #### Daily number of comments, weekly, monthly averages
 
@@ -252,6 +254,8 @@ weekly_avg = coms_daily_count.groupby_dynamic("date", every="1w").agg(
 monthly_avg = coms_daily_count.groupby_dynamic("date", every="1mo").agg(
     [pl.col("count").mean()]
 )
+# from left to right - average number of comments :
+# weekly avg (line), weekly avg (bars), monthly avg (line), monthly avg (bar)
 ```
 
 ```{python}
@@ -364,7 +368,8 @@ weekly_coms_per_articles = weekly_coms_per_articles.with_columns(
 print(weekly_coms_per_articles.head(3))
 ```
 
-Comments activity keeps being high throughout the "first" year of conflict whatever articles frequency :
+Comments activity keeps being high throughout the "first" year of conflict whatever the articles publication rhythm, with even a bigger number of comments per articles in the end period than in the very start.\
+Some context : first two weeks of September : Ukraine counter-offensive in Karkhiv & Russian mobilization. January 2023 : battle tanks ?
 
 ```{python}
 #| code-fold: true
@@ -410,129 +415,182 @@ px.bar(
 
 ## Who are the most active contributors ? Hardcore posters vs. the silent crowd
 
-**Fun fact** : the guy "goupil_hardi" would regularly act as a "sentinel" and --kind of, debunk & (manually) count then expose the pro-russian individuals/contributions. He is the one that made me decide to scrap and count in a more serious fashion.\
-Could also do a lot of interesting stuff on trolls detection (if any) but we focused our efforts elsewhere.
+::: {.callout-note appearance="simple"}
+Fun fact: *goupil_hardi* acts as a true "*sentinel*" of the comments section, to a point where he *manually* counts & regularly cite the pro russian contributions under the articles. He is the one that made me decide to get the dataset and build this notebook.
+:::
 
-#### Top authors ; glad everyone is using a pseudonym o_O
+Could also do a lot of interesting stuff on trolls detection (if any, access to comments is pretty restricted) but we focused our efforts elsewhere.
+
+#### Top authors ; glad everyone is using a pseudonym ;)
 
 ```{python}
 # top commentators
 authors = coms.groupby("author").count().sort("count", descending=True)
-print(authors.head(10))
+```
+
+```{python}
+#| echo: false
+#| column: margin
+print(authors.head(5))
 ```
 
 #### Contribution shape, as expected, hardcore posters vs. the rest
 
-Just different ways to represent how the authors population is distributed
+10 700 authors, average of 20 comments a year but the median is 4 coms only. Two authors with more than 2K comments. See how the top authors skew the distribution below.
 
-```{python}
+``` python
 authors.describe()
 ```
 
 ```{python}
-px.violin(
+#| echo: false
+#| column: margin
+print(authors.describe())
+```
+
+```{python}
+#| code-fold: true
+#| label: fig-violin
+#| fig-cap: "violin plot of authors, with all data points on the left side"
+fig_violin = px.violin(
     authors.to_pandas(),
     y="count",
     box=True,
-    points="all",
-    width=800,
+    points="all", # add data points
+    #width=600,
     height=400,
     template=template,
 )
+fig_violin.show()
 ```
 
 ```{python}
-# too many 'outliers' to visualize with a std box, cut authors in half.
-# or visualize as 'points' as above
-px.box(authors.to_pandas()[5000:], y="count", width=800, height=400, template=template)
-```
+#| echo: false
+#| eval: false
 
-```{python}
 # histogram (filtered)
-px.histogram(
+histo = px.histogram(
     authors.filter(pl.col("count") <= 200).to_pandas(),
     x="count",
     width=600,
     height=400,
     template=template,
 )
+# too many 'outliers' to visualize with a std box, keep first half of authors
+box = px.box(
+    authors.to_pandas()[5000:],
+    y="count",
+    #width=800
+    height=400,
+    template=template
+)
+
+histo.show()
+box.show()
 ```
 
-### Names that rings a bell
+### Names that ring a bell
+
+If you had time to spare , you could do some semantic search / analysis on the arguments of each side. E.g the dissemination of pro-Russia arguments. But here a simple overview of selected authors & comments.
+
+*"Goupil Hardi",* second top poster with 2034 comments in 365 days (5 a days, on Ukraine only). Also not that the comment section is limited to one comment per author, per article + 3 replies-to-comment.
 
 ```{python}
-authors.head(10)
+#| output : asis
+# in Polars, unless I'm doing it wrong, it's harder than with Pandas to extract a col values.
+selected_coms = coms.select(["author", "date", "comment"]).filter(
+    pl.col("author") == "goupil hardi").sample(n=3, seed=42).get_column("comment").to_list()
+
+for i, com in enumerate(selected_coms):
+    print(f"({i+1}) {com[0:90]}...")
 ```
 
-```{python}
-# As a comments reader, "goupil hardi" rings a bell
-# he acts kind of like a "troll/fact checker"
-# Second top poster with 2034 comments in 365 days
-# (more than 5 comments a day, on Ukraine only)
-
-coms.select(["author", "date", "comment"]).filter(
-    pl.col("author") == "goupil hardi"
-).sample(10)
-```
+What about *"Lux",* the top poster ? Don't remember seeing his name, but a similar profile --with less dedication ;)
 
 ```{python}
-# what about Lux, the top poster ? Don't remember about him
+#| echo: false
+#| output : asis
 # looks like a strong supporter of Ukraine + wary about "propagandists".
 # Superficial analysis I know. Just curious.
-coms.select(["author", "date", "comment"]).filter(pl.col("author") == "Lux").sample(10)
+selected_coms2 = coms.select(["author", "date", "comment"]).filter(
+    pl.col("author") == "Lux").sample(n=3, seed=10).get_column("comment").to_list()
+
+for i, com in enumerate(selected_coms2):
+    print(f"({i+1}) {com[0:90]}...")
 ```
+
+*"Monod-Broca".* Well, to each their own.
 
 ```{python}
-# Denis Monod-Broca, also a name I remember of.
+#| echo: false
+#| output : asis
+# Denis Monod-Broca, also a name I remember of. Comments also on other topics to my recollection.
 # To the very least a strong defender of Russian invasion.
-coms.select(["author", "date", "comment"]).filter(
-    pl.col("author") == "Denis Monod-Broca"
-).sample(10)
-```
+selected_coms3 = coms.select(["author", "date", "comment"]).filter(
+    pl.col("author") == "Denis Monod-Broca").sample(n=3, seed=58).get_column("comment").to_list()
 
-Could also do a lot of interesting stuff on trolls (if they exist) but out of this overview scope.
+for i, com in enumerate(selected_coms3):
+    print(f"({i+1}) {com[0:90]}...")
+```
 
 ## Engagement through cohort analysis, what's about the retention rate ?
 
 A fancier way to analyze people engagement, over time, on the topic.\
-Would be interesting to perform some benchmark on the retention rate on other topics.
+Would be interesting to perform some benchmark on other topics.
 
-```{python}
-# Steps
-# 1. add/get comment month -> month of the comment for each author
-# 2. add/get cohort month (first month that user posted a comment) 
-# -> first month the authors commented
-# 3. add/get cohort index for each row
+```         
+Steps
+1. add/get comment month -> month of the comment for each author
+2. add/get cohort month (first month that user posted a comment) 
+    -> first month the authors commented = cohort creation
+3. add/get cohort index for each row
 ```
 
 ```{python}
-# keep relevant columns only
+# clone data to avoid recursive edit of our dataset
 cohort = coms.clone()
-cohort.head(1)
+```
+
+Reminder on how our original data looks like :
+
+```{python}
+#| column: page
+#| echo: false
+print(cohort.head(1))
 ```
 
 ```{python}
+#| echo: true
+#| column: margin
+# We will only use authors, date, number of comments to render our cohort
+# Also, switch to Pandas, more familiar with it for the following operations
 relevant_columns = ["author", "date", "article_id"]
 cohort = cohort.select(relevant_columns)
-# switch to Pandas for now, more familiar with it
 cohort = cohort.to_pandas()
-cohort.head(3)
+cohort.head(2)
 ```
 
+#### Shape to cohort (Pandas)
+
 ```{python}
+#| echo: true
+#| column: margin
 # 1. comment month
 # tip : map faster than apply, we can use it cause we're dealin with one col at a time
 cohort["comment_month"] = cohort["date"].map(lambda x: datetime(x.year, x.month, 1))
-display(cohort.head(1))
+display(cohort.head(2))
+
 # 2. cohort month
 # tip : transform after a groupby,return a df with the same length
 # and here return the min for each entry
 cohort["cohort_month"] = cohort.groupby("author")["comment_month"].transform("min")
-display(cohort.head(3))
+display(cohort.head(2))
 ```
 
 ```{python}
-# 3. cohort index (for each row, difference in months,
+#| echo: true
+#| column: margin
+# 3. cohort index : for each row, difference in months,
 # between first comment month and cohort month
 def get_date(df, column):
     year = df[column].dt.year
@@ -546,10 +604,13 @@ cohort_year, cohort_month, _ = get_date(cohort, "cohort_month")
 year_diff = comment_year - cohort_year
 month_diff = comment_month - cohort_month
 cohort["cohort_index"] = year_diff * 12 + month_diff + 1
-display(cohort.head(5))
+display(cohort.head(4))
 ```
 
+#### Cohort active users (retention rate of authors)
+
 ```{python}
+# final shaping groupby cohort_month * cohort_index, count (unique) authors
 # cohort active users (active authors / retention rate)
 active_authors = (
     cohort.groupby(["cohort_month", "cohort_index"])["author"]
@@ -559,95 +620,94 @@ active_authors = (
 active_authors = active_authors.pivot_table(
     index="cohort_month", columns="cohort_index", values="author"
 )
-active_authors
 ```
 
 ```{python}
-fig = px.imshow(active_authors, text_auto=True, width=800, height=500)
+# generate cohort with Plotly, as a heatmap
+fig = px.imshow(
+    active_authors,
+    text_auto=True,
+    #width=1000,
+    height=500
+    )
+```
+
+::: column-page-inset-right
+::: panel-tabset
+## Active users (count)
+
+```{python}
+#| echo: false
+#| label: fig-cohort-count
+#| fig-cap: "From left to right : our first cohort of authors (febr.) counts 2184 users. After 1 month 1677 are still active and after 12 months (first line last cell), 1050 are still commenting. Sept. cohort (row 8) : 513 new unique authors of which 63 only are active after 5 months"
 fig.show()
 ```
 
-```{python}
-active_authors_pct = active_authors.copy(deep=True)
-active_authors_pct
-```
+## Data
 
 ```{python}
-# pct active users
+#| echo: false
+active_authors
+```
+:::
+:::
+
+#### Cohort percentage active users (retention rate, in %)
+
+```{python}
+#| code-fold : true
+# Clone previous dataframe (cohort users, count)
+active_authors_pct = active_authors.copy(deep=True)
+
+# get %
 active_authors_pct = active_authors.copy(deep=True)
 for col in active_authors_pct.columns[1:]:
     active_authors_pct[col] = round(
         active_authors_pct[col] / active_authors_pct[1] * 100, 2
     )
 active_authors_pct[1] = 100
-active_authors_pct.head(2)
-```
 
-```{python}
+# Generate heatmap (cohort users, %)
 labels = {"x": "n months", "y": "cohort (by month)", "color": "% author"}
 
-fig = px.imshow(active_authors_pct, text_auto=True, labels=labels)
-fig.update_xaxes(side="top", ticks="outside", tickson="boundaries", ticklen=5)
-fig.update_yaxes(showgrid=False)
+fig_pct = px.imshow(active_authors_pct, text_auto=True, labels=labels)
+fig_pct= fig_pct.update_xaxes(side="top", ticks="outside", tickson="boundaries", ticklen=5)
+fig_pct = fig_pct.update_yaxes(showgrid=False)
 
-fig.update_layout(
+fig_pct = fig_pct.update_layout(
     {
         "xaxis": {"tickmode": "linear", "showgrid": False},
-        "width": 800,
+        #"width": 800,
         "height": 500,
         "plot_bgcolor": "rgba(0, 0, 0, 0)",
         "paper_bgcolor": "rgba(0, 2, 0, 0)",
     }
 )
-fig.show()
 ```
+
+::: column-page-inset-right
+::: panel-tabset
+## Active users (%)
+
+```{python}
+#| echo: false
+#| label: fig-cohort-pct
+#| fig-cap: "Globally the retention rate is lower in later cohorts (authors that start posted later this year)"
+fig_pct.show()
+```
+
+## Data
+
+```{python}
+#| echo: false
+active_authors_pct
+```
+:::
+:::
 
 ## Comments embedding & fast retrieval using SBERT, Faiss
 
-#### Fasten our models evaluation through prior sampling.
-
-To speed our experiments up, we will work with a sample of comments (around 10% : 236k -\> 20k)\
-FYI,embedding of all comments (all 236k rows), takes approx 10mn on a 1080ti, i7700k, 32gb ram, with models listed below, and even more when using the biggest model `Camembert`.\
-Switched back to Pandas, to faster replicate / adapt resources examples.
-
-```{python}
-# Remember, our dataset was loaded as a Polars dataframe,
-# sample method is very similar in Pandas though.
-coms_sample = coms.sample(seed=42, n=20000, shuffle=True)
-# We're removing articles content and some other cols we won't work with
-keep_cols = [
-    "article_id",
-    "url",
-    "title",
-    "desc",
-    "date",
-    "keywords",
-    "author",
-    "comment",
-]
-coms_sample = coms_sample.select(pl.col(keep_cols))
-print(coms_sample.shape)
-display(coms_sample.head(1))
-```
-
-```{python}
-# Quick cleaning, typically remove comments with 3 emojis only
-# Just filter out small comments
-coms_sample = coms_sample.filter(pl.col("comment").str.n_chars() >= 45)
-print(coms_sample.shape)
-
-# Optional : on later stages as we will perform semantic search on comments
-# let's add a simple, order "id" column to our comments. Not needed eventually.
-comment_ids = list(range(0, coms_sample.shape[0]))
-coms_sample = coms_sample.with_columns(pl.Series(name="comment_id", values=comment_ids))
-display(coms_sample.head(1))
-```
-
-```{python}
-# convert back to Pandas, for "better/faster" flow with embeddings and FAISS
-coms_sample = coms_sample.to_pandas()
-coms_sample.head(1)
-```
+Example of use : if we wanted to retrieve similar arguments / check propaganda --in an efficient way, with Faiss.
 
 #### Semantic search : resources & performance overview of our curated models
 
@@ -660,7 +720,7 @@ coms_sample.head(1)
     Faiss uses **inner product** (=dot product ; += cosine score if vectors are normalized e.g using faiss.normalize_L2 or **L2** to measure distances [(more here)](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances#how-can-i-index-vectors-for-cosine-similarity).\
     In the first place, we were not sure of our typical use case : short query =\> long comment (asymmetric), or comment =\> similar comment (symmetric).
 
--   *Candidate models we tested :*
+-   *Candidate models we curated & tested :*
 
     +---------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
     | Models                                | Quick notes                                                                                                                                                  |
@@ -682,7 +742,68 @@ coms_sample.head(1)
     `mpnet-base-v2`, `distiluse`, `quora` : with a flat inner product faiss index, no difference if we perform vectors normalization or not, maybe because they're optimized for cosine already?\
     `camembert` is a bigger model (1024 dimension), slower encoding (20k docs = 5mn), nice (better?) results (spoiler alert : it is optimized for French). With a flat IP index, if normalize = False, retrieve similar, *short* documents. If we normalize our embeddings, it retrieves our initial query + *longer*, similar documents.
 
-    #### Convenience functions to repeat our different models runs
+#### Fasten our models evaluation through prior rdm sampling, notes on speed.
+
+To speed our experiments up, we will work with a sample of comments (around 10% : 236k -\> 20k)\
+FYI,embedding of all comments (all 236k), takes approx 10mn on a 1080ti, i7700k, 32gb RAM, with curated models ; \*1.5 to \*2 when using the biggest model (`Camembert`).\
+Encoding on our sample (10k) is \< 1mn.\
+No detailed measure on inference speed, but very fast with Faiss. Might want to try different indexes types with a bigger dataset.
+
+```{python}
+# Remember, our dataset was loaded as a Polars dataframe,
+# sample method is very similar in Pandas though.
+coms_sample = coms.sample(seed=42, n=20000, shuffle=True)
+# We're removing articles content and some other cols we won't work with
+keep_cols = [
+    "article_id",
+    "url",
+    "title",
+    "desc",
+    "date",
+    "keywords",
+    "author",
+    "comment",
+]
+coms_sample = coms_sample.select(pl.col(keep_cols))
+```
+
+```{python}
+#| column: margin
+print(coms_sample.shape)
+```
+
+```{python}
+#| column: page
+#| echo: false
+print(coms_sample.head(2))
+```
+
+```{python}
+# Quick cleaning, typically remove comments with 3 emojis only
+# Just filter out small comments
+coms_sample = coms_sample.filter(pl.col("comment").str.n_chars() >= 45)
+
+# Finally, convert back to Pandas, for a "better" (re use of code;) workflow with Sbert and FAISS
+coms_sample = coms_sample.to_pandas()
+```
+
+```{python}
+#| column: margin
+print(coms_sample.shape)
+```
+
+```{python}
+#| eval: false
+#| echo: false
+#| output: false
+# Optional : on later stages as we will perform semantic search on comments
+# let's add a simple, order "id" column to our comments. Not needed eventually.
+comment_ids = list(range(0, coms_sample.shape[0]))
+coms_sample = coms_sample.with_columns(pl.Series(name="comment_id", values=comment_ids))
+print(coms_sample.head(2))
+```
+
+#### Convenience functions to repeat our experiments with different indexes / models
 
 ```{python}
 """ comments embedding """
@@ -778,7 +899,7 @@ index = create_faiss_index(embeddings, normalize, index_type="ip")
 ```
 
 ```{python}
-#|eval: false
+#| eval: false
 # optional : save Faiss index to disk
 filename = "mpnet"
 save_index(index, filename)
@@ -787,6 +908,7 @@ save_index(index, filename)
 ```{python}
 # Optional, load from disk the previously saved Faiss index
 # so we do not rerun embeddings everytime we're executing the notebook
+# we found mpnet (multilang) to be a very good baseline for our dataset.
 filename = "mpnet.index"
 index = load_index(filename)
 ```
@@ -794,11 +916,12 @@ index = load_index(filename)
 #### Let's find similar comments
 
 ```{python}
-# extract an existing comment (= will be our query) from dataset
-coms_sample["comment"].tolist()[1300]
+# extract an existing comment (= will be our input query) from dataset
+print(coms_sample["comment"].tolist()[1300])
 ```
 
 ```{python}
+#| output : asis
 # encode query, query index
 query = "Quelle arrogance et quel cynisme. Qu'y a t-il de plus terroriste que la Russie d'aujourd'hui?"
 top_k = 8
@@ -812,4 +935,6 @@ for i, result in enumerate(results):
     print(f"{i+1}| : {result}")
 ```
 
-#### Maybe later just for fun : 0 shot "tone" classification tests using OpenAI API
+------------------------------------------------------------------------
+
+Maybe later just for fun : 0 shot "tone" classification tests using OpenAI API
