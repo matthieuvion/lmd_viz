@@ -8,8 +8,9 @@ execute:
     freeze: auto
 format:
     html:
-        toc: false
+        toc: true
         toc-location: left
+        topc-depth: 2
         theme: spacelab
         grid:
             margin-width: 320px
@@ -37,9 +38,9 @@ As a reader of *Le Monde* ---and the comments section ;) I would regularly encou
 \
 After our initial data collection[^1] we use `Polars` as an alternative to `Pandas` (still used in some parts when we had to code faster) to perform aggregations and `Plotly` to visualize[^2].
 
-[^1]: Custom API, dataset & scope on my other [project](https://github.com/lmd_ukr "go to github "lmd_ukr" api & dataset")
+[^1]: Custom API, dataset & scope on my other [project](https://github.com/matthieuvion/lmd_ukr)
 
-[^2]: This article itself is an html rendering of this [source notebook](https://github.com/lmd_viz "source .ipynb notebook"), via Quarto
+[^2]: This article itself = ipynb ([source notebook](https://github.com/matthieuvion/lmd_viz)) -\> qmd -\> html , via Quarto
 
 The analysis focuses on comments/authors (big numbers, activity over time, cohort analysis...) rather than on articles & titles. To this end, we also lay the foundations to go deeper in the semantic analysis through semantic search on comments via `Sbert` embedding + a `Faiss` index.
 
@@ -79,11 +80,11 @@ template = "simple_white"
 
 ## Load data
 
-236k comments with associated articles & titles \| 24th feb 2022 - 24 feb 2023\
+236k comments collected, with associated articles & titles \| 24th feb 2022 - 24 feb 2023\
 Reminder : conflict starts Febr the 24th 2022, if we exclude the prior Dombass "events".\
 Load our .parquet dataset[^3] using Polars.
 
-[^3]: Used keywords, [scope](https://github.com/matthieuvion/ukr_lmd) and limitations of our dataset
+[^3]: Used keywords, [scope](https://github.com/matthieuvion/lmd_ukr) and limitations of our dataset
 
 ```{python}
 # Read parquet using Polars. Could also use scan + collect syntax for lazy execution
@@ -128,7 +129,7 @@ print(f"Number of comments: {count},\nUnique articles: {nunique_articles},\nUniq
 
 ::: {.callout-note appearance="simple"}
 After some googling : *Le Monde* has +-450k online subscribers (+-540k total). The comment section is open to subscribers only.\
-10 500 unique authors means that around **2,3% of the reader base** have engaged in the comment section during the year, on this topic. Not surprising but not bad either, purely by rule of thumb.
+10 500 unique authors means that around **2,3% of the reader base** have engaged in the comment section during the year, on this topic. Not surprising but not bad either, purely by rule of thumb -- a bench. would be interesting.
 :::
 
 #### Editorial & comment activity, elements of comparison
@@ -489,7 +490,7 @@ histo.show()
 box.show()
 ```
 
-### Names that ring a bell
+#### Names that ring a bell
 
 If you had time to spare , you could do some semantic search / analysis on the arguments of each side. E.g the dissemination of pro-Russia arguments. But here a simple overview of selected authors & comments.
 
@@ -747,7 +748,7 @@ Example of use : if we wanted to retrieve similar arguments / check propaganda -
 To speed our experiments up, we will work with a sample of comments (around 10% : 236k -\> 20k)\
 FYI,embedding of all comments (all 236k), takes approx 10mn on a 1080ti, i7700k, 32gb RAM, with curated models ; \*1.5 to \*2 when using the biggest model (`Camembert`).\
 Encoding on our sample (10k) is \< 1mn.\
-No detailed measure on inference speed, but very fast with Faiss. Might want to try different indexes types with a bigger dataset.
+No detailed measure on inference speed, but very fast with Faiss. Might want to try different --optimized, [indexes types](https://github.com/facebookresearch/faiss/wiki/Guidelines-to-choose-an-index)with a bigger dataset.
 
 ```{python}
 # Remember, our dataset was loaded as a Polars dataframe,
@@ -922,14 +923,14 @@ print(coms_sample["comment"].tolist()[1300])
 
 ```{python}
 #| output : asis
-# encode query, query index
+# encode query, query index, retrieve top_k --here 8, nearest comments
 query = "Quelle arrogance et quel cynisme. Qu'y a t-il de plus terroriste que la Russie d'aujourd'hui?"
 top_k = 8
 Distances, Indexes = search_index(index, model, query, normalize, top_k)
 ```
 
 ```{python}
-# display top nearest comments
+# display top similar comments
 results = index_to_comments(coms_sample, "comment", Indexes)
 for i, result in enumerate(results):
     print(f"{i+1}| : {result}")
